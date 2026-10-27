@@ -1,5 +1,5 @@
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
-import { getBases, RSS_PATH_CANDIDATES } from './sources';
+import { expandToFeedUrls, getSourceEntries } from './sources';
 
 export type FeedItem = {
   title: string;
@@ -10,20 +10,21 @@ export type FeedItem = {
   source?: string;
 };
 
-async function fetchText(url: string, timeoutMs = 8000): Promise<string | null> {
+async function fetchText(url: string, timeoutMs = 12000): Promise<string | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       signal: ctrl.signal,
       headers: {
-        'User-Agent': 'StreamLiveRSSMerge/1.0 (+https://github.com/twixoffltdco)',
+        'User-Agent': 'StreamLiveRSSMerge/1.1 (+https://streamliverss.tatnet.app)',
         Accept: 'application/rss+xml, application/xml, text/xml, */*',
       },
-      next: { revalidate: 300 },
-    } as RequestInit);
+      cache: 'no-store',
+    });
     if (!res.ok) return null;
-    return await res.text();
+    const text = await res.text();
+    return text;
   } catch {
     return null;
   } finally {
@@ -31,7 +32,7 @@ async function fetchText(url: string, timeoutMs = 8000): Promise<string | null> 
   }
 }
 
-function itemsFromXml(xml: string, sourceBase: string): FeedItem[] {
+function itemsFromXml(xml: string, sourceLabel: string): FeedItem[] {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -48,7 +49,7 @@ function itemsFromXml(xml: string, sourceBase: string): FeedItem[] {
   if (channel?.item) {
     const list = Array.isArray(channel.item) ? channel.item : [channel.item];
     for (const it of list) {
-      const link = String(it.link || it.guid || '').trim();
+      const link = String(it.link || it.guid?.['#text'] || it.guid || '').trim();
       const guid = String(it.guid?.['#text'] || it.guid || link).trim();
       out.push({
         title: String(it.title || 'Без названия').trim(),
@@ -56,11 +57,10 @@ function itemsFromXml(xml: string, sourceBase: string): FeedItem[] {
         guid: guid || link,
         description: String(it.description || it['content:encoded'] || '').trim(),
         pubDate: it.pubDate ? String(it.pubDate) : undefined,
-        source: sourceBase,
+        source: sourceLabel,
       });
     }
   }
-  // Atom
   const feed = doc?.feed;
   if (feed?.entry) {
     const list = Array.isArray(feed.entry) ? feed.entry : [feed.entry];
@@ -76,38 +76,65 @@ function itemsFromXml(xml: string, sourceBase: string): FeedItem[] {
         title: String(it.title?.['#text'] || it.title || 'Без названия').trim(),
         link,
         guid,
-        description: String(it.summary?.['#text'] || it.summary || it.content?.['#text'] || it.content || '').trim(),
+        description: String(
+          it.summary?.['#text'] || it.summary || it.content?.['#text'] || it.content || ''
+        ).trim(),
         pubDate: it.updated || it.published ? String(it.updated || it.published) : undefined,
-        source: sourceBase,
+        source: sourceLabel,
       });
     }
   }
   return out;
 }
 
-export async function collectMergedItems(): Promise<{ items: FeedItem[]; sourcesTried: string[]; sourcesOk: string[] }> {
-  const bases = getBases();
+function looksLikeFeed(body: string): boolean {
+  if (!body || body.length < 40) return false;
+  const s = body.slice(0, 4000).toLowerCase();
+  if (s.includes('<html') && !s.includes('<rss') && !s.includes('<feed')) return false;
+  return s.includes('<rss') || s.includes('<feed') || s.includes('<item') || s.includes('<entry');
+}
+
+export async function collectMergedItems(): Promise<{
+  items: FeedItem[];
+  sourcesTried: string[];
+  sourcesOk: string[];
+  errors: Record<string, string>;
+}> {
+  const entries = getSourceEntries();
   const sourcesTried: string[] = [];
   const sourcesOk: string[] = [];
+  const errors: Record<string, string> = {};
   const byGuid = new Map<string, FeedItem>();
 
   await Promise.all(
-    bases.map(async (base) => {
-      for (const path of RSS_PATH_CANDIDATES) {
-        const url = base + path;
+    entries.map(async (entry) => {
+      const urls = expandToFeedUrls(entry);
+      let ok = false;
+      for (const url of urls) {
         sourcesTried.push(url);
         const body = await fetchText(url);
-        if (!body || body.length < 40) continue;
-        if (!body.includes('<rss') && !body.includes('<feed') && !body.includes('<item')) continue;
-        const items = itemsFromXml(body, base);
-        if (!items.length) continue;
-        sourcesOk.push(url);
-        for (const it of items) {
-          const key = it.guid || it.link || `${it.title}|${it.pubDate}`;
-          if (!byGuid.has(key)) byGuid.set(key, it);
+        if (!body) {
+          errors[url] = 'network/timeout';
+          continue;
         }
-        break; // first working path per base
+        if (!looksLikeFeed(body)) {
+          errors[url] = 'not_rss';
+          continue;
+        }
+        const items = itemsFromXml(body, entry);
+        if (!items.length) {
+          errors[url] = 'empty_items';
+          continue;
+        }
+        sourcesOk.push(url);
+        ok = true;
+        for (const it of items) {
+          const key = (it.guid || it.link || `${it.title}|${it.pubDate}`).trim();
+          if (key && !byGuid.has(key)) byGuid.set(key, it);
+        }
+        break;
       }
+      if (!ok && !errors[entry]) errors[entry] = 'no_working_path';
     })
   );
 
@@ -117,17 +144,35 @@ export async function collectMergedItems(): Promise<{ items: FeedItem[]; sources
     return tb - ta;
   });
 
-  return { items, sourcesTried, sourcesOk };
+  return { items, sourcesTried, sourcesOk, errors };
 }
 
-export function buildRssXml(items: FeedItem[], opts: { title: string; link: string; description: string }): string {
-  const limited = items.slice(0, 200);
+export function publicOrigin(req: Request): string {
+  const env =
+    process.env.PUBLIC_URL ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    '';
+  if (env) return env.replace(/\/$/, '');
+  const host =
+    req.headers.get('x-forwarded-host') ||
+    req.headers.get('host') ||
+    'localhost:3000';
+  const proto = req.headers.get('x-forwarded-proto') || 'https';
+  return `${proto}://${host}`.replace(/\/$/, '');
+}
+
+export function buildRssXml(
+  items: FeedItem[],
+  opts: { title: string; link: string; description: string }
+): string {
+  const limited = items.slice(0, 300);
   const channelItems = limited.map((it) => ({
     title: it.title,
     link: it.link,
     guid: it.guid || it.link,
     description: it.description
-      ? `${it.description}${it.source ? ` [source: ${it.source}]` : ''}`
+      ? `${it.description}${it.source ? `\n\nИсточник: ${it.source}` : ''}`
       : it.source || '',
     ...(it.pubDate ? { pubDate: it.pubDate } : {}),
   }));
@@ -135,7 +180,6 @@ export function buildRssXml(items: FeedItem[], opts: { title: string; link: stri
   const builder = new XMLBuilder({
     ignoreAttributes: false,
     format: true,
-    cdataPropName: undefined,
   });
 
   const obj = {
@@ -148,7 +192,7 @@ export function buildRssXml(items: FeedItem[], opts: { title: string; link: stri
         description: opts.description,
         language: 'ru',
         lastBuildDate: new Date().toUTCString(),
-        item: channelItems,
+        item: channelItems.length ? channelItems : undefined,
       },
     },
   };

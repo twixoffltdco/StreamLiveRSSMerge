@@ -1,25 +1,36 @@
 export default function Home() {
   return (
-    <main style={{ fontFamily: 'system-ui,sans-serif', maxWidth: 720, margin: '40px auto', padding: 16, lineHeight: 1.5 }}>
+    <main
+      style={{
+        fontFamily: 'system-ui,sans-serif',
+        maxWidth: 720,
+        margin: '40px auto',
+        padding: 16,
+        lineHeight: 1.5,
+      }}
+    >
       <h1>StreamLive RSS Merge</h1>
       <p>
-        Open-source агрегатор: забирает RSS с нескольких зеркал StreamLive, склеивает в одну ленту
-        для встраивания на другие платформы.
+        Склеивает RSS с зеркал StreamLive в одну ленту для встраивания на другие
+        платформы.
       </p>
       <ul>
         <li>
-          Единая лента: <a href="/api/feed">/api/feed</a> (RSS 2.0)
+          Лента: <a href="/api/feed">/api/feed</a>
         </li>
         <li>
-          Статус источников: <a href="/api/status">/api/status</a>
+          Статус: <a href="/api/status">/api/status</a>
         </li>
       </ul>
-      <p style={{ opacity: 0.75, fontSize: 14 }}>
-        Источники по умолчанию: streamlivetv.freedev.app, domtv.blyz.ru, streamliveru.web1337.net.
-        Переопределение: env <code>SOURCES=https://a.com,https://b.com</code>
-      </p>
-      <p>
-        <a href="https://github.com/twixoffltdco/streamliveapp">Аналог по духу: streamliveapp</a>
+      <p style={{ opacity: 0.8, fontSize: 14 }}>
+        Если лента пустая — открой <code>/api/status</code>: там видно, какие
+        URL ответили. В env можно задать полные фиды:
+        <br />
+        <code>
+          SOURCES=https://streamlivemax.tatnet.app/rss.xml,https://example.com/rss.xml
+        </code>
+        <br />
+        И публичный URL сайта: <code>PUBLIC_URL=https://streamliverss.tatnet.app</code>
       </p>
     </main>
   );
