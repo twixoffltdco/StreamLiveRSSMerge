@@ -1,29 +1,30 @@
 # StreamLive RSS Merge
 
-Open-source: несколько зеркал → **одна RSS-лента**.
+Склеивает ленты зеркал в один RSS: `/api/feed`.
 
-## Быстрый деплой (Tatnet / Layero / Vercel)
+## Почему нет domtv / freedev / web1337 в pull
 
-```bash
-npm i
-npm run build
-npm start
-```
+Эти хосты часто:
+1. Показывают **JS antibot** (`aes.js` + cookie `__test`)
+2. Отдают **403 Forbidden** серверным IP (VPS/Tatnet)
 
-### Env (важно)
+Браузер пользователя проходит, **сервер агрегатора — нет**.
+
+## Что сделано
+
+1. **Pull** с попыткой расшифровать InfinityFree cookie + HTML fallback  
+2. **Push API** — зеркало само шлёт items (cron), antibot не мешает
+
+### Env на streamliverss.tatnet.app
 ```env
 PUBLIC_URL=https://streamliverss.tatnet.app
-SOURCES=https://streamlivemax.tatnet.app/rss.xml,https://streamlivetv.freedev.app,https://domtv.blyz.ru,https://streamliveru.web1337.net
+PUSH_SECRET=придумай_секрет
+SOURCES=https://streamlivemax.tatnet.app/rss.xml,https://domtv.blyz.ru,https://streamlivetv.freedev.app,https://streamliveru.web1337.net
 ```
 
-Можно указывать **полные** URL фидов (`…/rss.xml`) или только домен.
+### На каждом PHP-зеркале
+1. Залей `php-push/cron_push_rss_to_merge.php` (поправь `require db.php`)
+2. Env или правки в файле: `RSS_MERGE_PUSH_URL`, `RSS_MERGE_PUSH_SECRET`
+3. Cron раз в час
 
-## API
-- `GET /api/feed` — RSS 2.0
-- `GET /api/status` — какие источники живы, sample items, errors
-
-## Почему лента была пустой
-Часть зеркал **не отдаёт RSS** или недоступна с сервера. Рабочий эталон:  
-`https://streamlivemax.tatnet.app/rss.xml` — добавлен в defaults.
-
-MIT
+Проверка: `/api/status` → `pushedCount`, `sourcesOk`, `errors`.
